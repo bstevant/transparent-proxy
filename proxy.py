@@ -28,6 +28,7 @@ from twisted.internet import reactor, protocol
 from twisted.python import log
 import re
 import sys
+import time
 
 log.startLogging(sys.stdout)
 
@@ -37,13 +38,16 @@ class ProxyClient(http.HTTPClient):
     form.
     """
 
-    def __init__(self, method, uri, postData, headers, originalRequest):
+    def __init__(self, method, uri, host, port, postData, headers, originalRequest):
         self.method = method
         self.uri = uri
+        self.host = host
+        self.port = port
         self.postData = postData
         self.headers = headers
         self.originalRequest = originalRequest
         self.contentLength = None
+        self.time_request = 0.0
 
     def sendRequest(self):
         log.msg("Sending request: %s %s" % (self.method, self.uri))
@@ -65,6 +69,7 @@ class ProxyClient(http.HTTPClient):
         self.transport.write(self.postData)
 
     def connectionMade(self):
+        self.time_request = time.time()
         log.msg("HTTP connection made")
         self.sendRequest()
         self.sendHeaders()
@@ -72,7 +77,9 @@ class ProxyClient(http.HTTPClient):
             self.sendPostData()
 
     def handleStatus(self, version, code, message):
+        tresp = time.time() - self.time_request
         log.msg("Got server response: %s %s %s" % (version, code, message))
+        log.msg("Host: %s Port: %d -- Tresp: %f" % (self.host, self.port, tresp))
         self.originalRequest.setResponseCode(int(code), message)
 
     def handleHeader(self, key, value):
@@ -93,16 +100,18 @@ class ProxyClient(http.HTTPClient):
         self.transport.loseConnection()
 
 class ProxyClientFactory(protocol.ClientFactory):
-    def __init__(self, method, uri, postData, headers, originalRequest):
+    def __init__(self, method, uri, host, port, postData, headers, originalRequest):
         self.protocol = ProxyClient
         self.method = method
         self.uri = uri
+        self.host = host
+        self.port = port
         self.postData = postData
         self.headers = headers
         self.originalRequest = originalRequest
 
     def buildProtocol(self, addr):
-        return self.protocol(self.method, self.uri, self.postData,
+        return self.protocol(self.method, self.uri, self.host, self.port, self.postData,
                              self.headers, self.originalRequest)
 
     def clientConnectionFailed(self, connector, reason):
@@ -132,7 +141,7 @@ class ProxyRequest(http.Request):
 
         self.content.seek(0, 0)
         postData = self.content.read()
-        factory = ProxyClientFactory(self.method, self.uri, postData,
+        factory = ProxyClientFactory(self.method, self.uri, host, port, postData,
                                      self.requestHeaders.getAllRawHeaders(),
                                      self)
         self.reactor.connectTCP(host, port, factory)
